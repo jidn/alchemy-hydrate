@@ -1,0 +1,21 @@
+[project]
+name = "alchemy-hydrate"
+version = "0.1.0"
+description = "Create dict from CSV for SQLAlchemy model instance."
+readme = "README.md"
+authors = [
+    { name = "Clinton James", email = "clinton@jidn.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "sqlalchemy>=2.0.41",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+]
