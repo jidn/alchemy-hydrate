@@ -5,9 +5,19 @@ from datetime import date, datetime
 
 __all__ = ["registry"]
 
+
+def _identity(x):
+    return x
+
+
+def _bool(x):
+    return x.lower() in ("true", "yes", "1")
+
+
 registry = {
     int: int,
-    str: lambda _: _,
+    str: _identity,
+    bool: _bool,
     uuid.UUID: uuid.UUID,
     datetime: datetime.fromisoformat,
     date: date.fromisoformat,
