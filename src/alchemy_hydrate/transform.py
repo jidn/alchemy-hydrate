@@ -27,9 +27,15 @@ class ConvertCol:
 
 
 class TransformData:
+    def __repr__(self):
+        lines = [self.name]
+        lines.extend(("  " + repr(_)) for _ in self.cols)
+        return "\n".join(lines)
+
     def __init__(self, table, extra_converters=None):
-        self.cols: list[ConvertCol] = []
         tbl = inspect(table).local_table
+        self.name: str = tbl.name
+        self.cols: list[ConvertCol] = []
 
         converters = registry
         if isinstance(extra_converters, dict):
@@ -51,11 +57,32 @@ class TransformData:
 
             tbl_col = f"{tbl.name}.{col.name}"
             if tbl_col in converters:
+                # Override this field amoung all other tables having this same
+                # field name. The global regisry would have been modified or
+                # it would have been passed in as a parameter.
                 func = converters[tbl_col]
             elif col.name in converters:
+                # Override conversion for this field
                 func = converters[col.name]
             elif python_type in converters:
-                func = converters[python_type]
+                # For basic types like Mapped[int]
+                # It can be very difficult to have length violations so lets
+                # check it here.
+                if python_type is not str:
+                    func = converters[python_type]
+                else:
+                    size = getattr(col.type, "length", None)
+                    if size is None:
+                        func = converters[python_type]
+                    else:
+
+                        def verify_str_length(value, max_len=size, field=col.name):
+                            if len(value) <= max_len:
+                                return value
+                            raise ValueError(f"{repr(field)} exceeds length {max_len}")
+
+                        func = verify_str_length
+
             elif isinstance(python_type, enum.EnumType):
                 # func = lambda s, t=python_type: create_enum_from_string(t, s)
                 def enum_type_from_str(s: str, t=python_type):
@@ -79,11 +106,8 @@ class TransformData:
 
     def __call__(self, input: dict[str, str]) -> dict[str, Any]:
         output = {}
-        for converter in reversed(self.cols):
-            try:
-                output[converter.name] = converter(input[converter.name])
-            except ValueError:
-                breakpoint()
+        for converter in self.cols:
+            output[converter.name] = converter(input[converter.name])
         return output
 
 

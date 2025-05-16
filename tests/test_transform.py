@@ -82,6 +82,22 @@ def test_multi_type_convert():
     }
 
 
+def test_str_exceeds_length():
+    class StringLength(Base):
+        __tablename__ = "str_exceeds_length"
+        id: Mapped[int] = mapped_column(primary_key=True)
+        my_field: Mapped[str | None] = mapped_column(String(10))
+
+    transform = TransformData(StringLength)
+
+    # This is small enough to not throw an error.
+    transform({"my_field": "hello", "id": "1"})
+
+    with pytest.raises(ValueError) as ex:
+        transform({"my_field": "This text exceeds the length limit.", "id": "1"})
+    assert "exceeds length " in str(ex.value)
+
+
 class State(enum.Enum):
     Pending = "pending"
     Active = "active"
@@ -153,8 +169,6 @@ def describe_table(table):
     table = inspect(MultiTypeModel).local_table
     pa = {"end": ", ", "sep": None}
     for col in table.columns:
-        if col.name == "id":
-            breakpoint()
         print("{name=", repr(col.name), **pa)
         print("nullable", col.nullable, **pa)
         print("type=", col.type, **pa)
