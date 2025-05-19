@@ -3,7 +3,8 @@ import enum
 import uuid
 
 import pytest
-from sqlalchemy import ForeignKey, Integer, String
+from sqlalchemy import Column, ForeignKey, Integer, MetaData, String, Table
+from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import Mapped, declarative_base, mapped_column
 from sqlalchemy.types import NULLTYPE
 
@@ -46,12 +47,12 @@ class MultiTypeModel(Base):
 
 
 def test_multi_type_parse():
-    transformer = TransformData(MultiTypeModel)
+    transformer = TransformData(inspect(MultiTypeModel).local_table)
     assert 10 == len(transformer)
 
 
 def test_multi_type_convert():
-    transformer = TransformData(MultiTypeModel)
+    transformer = TransformData(inspect(MultiTypeModel).local_table)
     data = transformer(
         {
             "id": "123",
@@ -82,26 +83,38 @@ def test_multi_type_convert():
     }
 
 
-def test_str_exceeds_length():
-    class StringLength(Base):
-        __tablename__ = "str_exceeds_length"
-        id: Mapped[int] = mapped_column(primary_key=True)
-        my_field: Mapped[str | None] = mapped_column(String(10))
+def transformer(*args):
+    return TransformData(Table("demo", MetaData(), *args))
 
-    transform = TransformData(StringLength)
+
+def test_str_exceeds_length():
+    """String with max length throw errors."""
+
+    convert = transformer(Column("msg", String(10)))
 
     # This is small enough to not throw an error.
-    transform({"my_field": "hello", "id": "1"})
+    convert({"msg": "hello"})
 
     with pytest.raises(ValueError) as ex:
-        transform({"my_field": "This text exceeds the length limit.", "id": "1"})
+        convert({"msg": "This text exceeds the length limit."})
     assert "exceeds length " in str(ex.value)
 
 
+def test_str_empty():
+    """Empty string convertion."""
+    convert = transformer(
+        Column("nullable_false", String(10), nullable=False),
+        Column("nullable_true", String(10), nullable=True),
+    )
+
+    data = convert({"nullable_false": "", "nullable_true": ""})
+    assert {"nullable_false": "", "nullable_true": None} == data
+
+
 class State(enum.Enum):
-    Pending = "pending"
-    Active = "active"
-    Complete = "complete"
+    PENDING = "pending"
+    ACTIVE = "active"
+    COMPLETE = "complete"
 
 
 class Level(enum.Enum):
@@ -126,8 +139,8 @@ class Permissions(enum.Flag):
 def test_enum_with_str():
     """Test str to enum.Enum with str member values."""
 
-    assert State.Active == State("active")
-    assert State.Complete == create_enum_from_string(State, "complete")
+    assert State.ACTIVE == State("active")
+    assert State.COMPLETE == create_enum_from_string(State, "complete")
 
     with pytest.raises(ValueError):
         State("invalid")
@@ -180,7 +193,7 @@ def describe_table(table):
 
 
 if __name__ == "__main__":
-    transformer = TransformData(MultiTypeModel)
+    transformer = TransformData(inspect(MultiTypeModel).local_table)
 
     for col in transformer.cols:
         print(col)

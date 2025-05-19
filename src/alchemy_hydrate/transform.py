@@ -2,10 +2,9 @@
 
 import enum
 from dataclasses import dataclass
-from functools import partial
 from typing import Any, Callable
 
-from sqlalchemy import inspect
+from sqlalchemy import Table
 from sqlalchemy.types import NullType
 
 from . import registry
@@ -18,11 +17,9 @@ class ConvertCol:
     typeof: Any
     from_str: Callable[[str], Any]
 
-    def __call__(self, input: str | None) -> Any:
-        if not input:
-            if self.nullable:
-                return None
-            raise ValueError(f"{self.name} is required.")
+    def __call__(self, input: str) -> Any:
+        if not input and self.nullable:
+            return None
         return self.from_str(input)
 
 
@@ -32,16 +29,28 @@ class TransformData:
         lines.extend(("  " + repr(_)) for _ in self.cols)
         return "\n".join(lines)
 
-    def __init__(self, table, extra_converters=None):
-        tbl = inspect(table).local_table
-        self.name: str = tbl.name
+    def __init__(self, table: Table, extra_converters=dict[Any, Callable] | None):
+        """A transform for the fields in table.
+
+        Args:
+            table: from sqlalchemy
+            extra_converters:
+                A dict of additional converters.
+                The dict key can be any of
+                    fieldname: str, ie 'when_created'
+                    type: ie datetime.datetime, enum.Enum
+
+        Raises:
+            ValueError for unavailable converter for table.columns.name
+        """
+        self.name: str = table.name
         self.cols: list[ConvertCol] = []
 
         converters = registry
         if isinstance(extra_converters, dict):
             converters = registry | extra_converters
 
-        for col in tbl.columns:
+        for col in table.columns:
             try:
                 if isinstance(col.type, NullType) and col.foreign_keys:
                     # TODO: the underlying type is int, but I don't see it
@@ -55,7 +64,7 @@ class TransformData:
             except Exception:
                 raise
 
-            tbl_col = f"{tbl.name}.{col.name}"
+            tbl_col = f"{table.name}.{col.name}"
             if tbl_col in converters:
                 # Override this field amoung all other tables having this same
                 # field name. The global regisry would have been modified or
@@ -98,7 +107,7 @@ class TransformData:
             else:
                 raise TypeError(f"No converter for {col}")
 
-            converter = ConvertCol(col.name, col.nullable, python_type, func)
+            converter = ConvertCol(col.name, bool(col.nullable), python_type, func)
             self.cols.append(converter)
 
     def __len__(self) -> int:
@@ -107,7 +116,9 @@ class TransformData:
     def __call__(self, input: dict[str, str]) -> dict[str, Any]:
         output = {}
         for converter in self.cols:
-            output[converter.name] = converter(input[converter.name])
+            # Ignore Table fields not in CSV, they may not be required.
+            if converter.name in input:
+                output[converter.name] = converter(input[converter.name])
         return output
 
 
