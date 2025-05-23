@@ -4,7 +4,7 @@ import enum
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from sqlalchemy import Table
+from sqlalchemy import Column, Table
 from sqlalchemy.types import NullType
 
 from . import registry
@@ -24,11 +24,6 @@ class ConvertCol:
 
 
 class TransformData:
-    def __repr__(self):
-        lines = [self.name]
-        lines.extend(("  " + repr(_)) for _ in self.cols)
-        return "\n".join(lines)
-
     def __init__(self, table: Table, extra_converters=dict[Any, Callable] | None):
         """A transform for the fields in table.
 
@@ -44,82 +39,102 @@ class TransformData:
             ValueError for unavailable converter for table.columns.name
         """
         self.name: str = table.name
-        self.cols: list[ConvertCol] = []
+        self.columns: list[ConvertCol] = []
 
-        converters = registry
+        self.converters = registry
         if isinstance(extra_converters, dict):
-            converters = registry | extra_converters
+            self.converters = registry | extra_converters
 
         for col in table.columns:
-            try:
-                if isinstance(col.type, NullType) and col.foreign_keys:
-                    # TODO: the underlying type is int, but I don't see it
-                    python_type = int
-                elif hasattr(col, "python_type"):
-                    python_type = col.python_type
-                elif hasattr(col.type, "python_type"):
-                    python_type = col.type.python_type
-                else:
-                    raise TypeError(f"What underlying type is {col}")
-            except Exception:
-                raise
+            # Convert by field name, type is irrelevant
+            if col.name in self.converters:
+                python_type = None
+                func = self.converters[col.name]
+            # Seen when type is subclass instance of TypeDecorators
+            elif getattr(col.type, "_is_type_decorator", None):
+                python_type = col.type.__class__
 
-            tbl_col = f"{table.name}.{col.name}"
-            if tbl_col in converters:
-                # Override this field amoung all other tables having this same
-                # field name. The global regisry would have been modified or
-                # it would have been passed in as a parameter.
-                func = converters[tbl_col]
-            elif col.name in converters:
-                # Override conversion for this field
-                func = converters[col.name]
-            elif python_type in converters:
-                # For basic types like Mapped[int]
-                # It can be very difficult to have length violations so lets
-                # check it here.
-                if python_type is not str:
-                    func = converters[python_type]
-                else:
-                    size = getattr(col.type, "length", None)
-                    if size is None:
-                        func = converters[python_type]
-                    else:
-
-                        def verify_str_length(value, max_len=size, field=col.name):
-                            if len(value) <= max_len:
-                                return value
-                            raise ValueError(f"{repr(field)} exceeds length {max_len}")
-
-                        func = verify_str_length
-
-            elif isinstance(python_type, enum.EnumType):
-                # func = lambda s, t=python_type: create_enum_from_string(t, s)
-                def enum_type_from_str(s: str, t=python_type):
-                    return create_enum_from_string(t, s)
-
-                func = enum_type_from_str
-            elif isinstance(python_type, enum.Flag):
-                # func = lambda s, t=python_type: create_flag_from_string(t, s)
-                def enum_flag_from_str(s, t=python_type):
-                    return create_flag_from_string(t, s)
+                def enum_flag_from_str(s, instance=col.type):
+                    return instance.process_result_value(s, None)
 
                 func = enum_flag_from_str
+
             else:
-                raise TypeError(f"No converter for {col}")
+                # Convert by column type
+                python_type = self.get_column_type(col)
+                func = self.get_coverter_by_type(col, python_type)
 
             converter = ConvertCol(col.name, bool(col.nullable), python_type, func)
-            self.cols.append(converter)
+            self.columns.append(converter)
 
     def __len__(self) -> int:
-        return len(self.cols)
+        return len(self.columns)
 
     def __call__(self, input: dict[str, str]) -> dict[str, Any]:
         output = {}
-        for converter in self.cols:
+        for converter in self.columns:
             # Ignore Table fields not in CSV, they may not be required.
             if converter.name in input:
                 output[converter.name] = converter(input[converter.name])
         return output
+
+    def __iter__(self):
+        return iter(self.columns)
+
+    def __repr__(self):
+        lines = [self.name]
+        lines.extend(("  " + repr(_)) for _ in self.columns)
+        return "\n".join(lines)
+
+    def get_column_type(self, column: Column) -> Any:
+        try:
+            if isinstance(column.type, NullType) and column.foreign_keys:
+                return int
+            elif hasattr(column, "python_type"):
+                return column.python_type
+            elif hasattr(column.type, "python_type"):
+                return column.type.python_type
+            else:
+                raise TypeError(f"What underlying type is {column}")
+        except Exception:
+            raise
+
+    def get_coverter_by_type(
+        self, column: Column, python_type: Any
+    ) -> Callable[[str], Any]:
+        if python_type in self.converters:
+            # For basic types like Mapped[str]
+            # It can be very difficult to have length violations so lets
+            # check it here.
+            if python_type is not str:
+                return self.converters[python_type]
+            else:
+                size = getattr(column.type, "length", None)
+                if size is None:
+                    return self.converters[python_type]
+                else:
+
+                    def verify_str_length(value, max_len=size, field=column.name):
+                        if len(value) <= max_len:
+                            return value
+                        raise ValueError(f"{repr(field)} exceeds length {max_len}")
+
+                    return verify_str_length
+
+        elif issubclass(python_type, enum.Flag):
+
+            def enum_flag_from_str(s, t=python_type):
+                return create_flag_from_string(t, s)
+
+            return enum_flag_from_str
+        elif isinstance(python_type, enum.EnumType):
+
+            def enum_type_from_str(s: str, t=python_type):
+                return create_enum_from_string(t, s)
+
+            return enum_type_from_str
+        else:
+            raise TypeError(f"No converter for {column}")
 
 
 def create_enum_from_string(enum_cls, value_str):
@@ -166,8 +181,8 @@ def create_flag_from_string(flag_cls, value: str):
 
     Args:
         flag_cls: enum.FlagEnum
-        value: Can be comma-separated names or an integer.
-            'READ,WRITE' or '3'
+        value: Can be pipe-separated names or an integer.
+            'READ|WRITE' or '3'
 
     Raises:
         ValueError if no match is found.
@@ -182,7 +197,7 @@ def create_flag_from_string(flag_cls, value: str):
     except ValueError:
         # Try matching by comma-separated names (case-insensitive)
         flags = 0
-        for name in value.upper().replace(" ", "").split(","):
+        for name in value.upper().replace(" ", "").split("|"):
             try:
                 flags |= flag_cls[name].value
             except KeyError:

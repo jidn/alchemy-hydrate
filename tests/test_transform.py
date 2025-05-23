@@ -3,7 +3,8 @@ import enum
 import uuid
 
 import pytest
-from sqlalchemy import Column, ForeignKey, Integer, MetaData, String, Table
+from sqlalchemy import Column, Integer, MetaData, String, Table
+from sqlalchemy import Enum as Enums
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import Mapped, declarative_base, mapped_column
 from sqlalchemy.types import NULLTYPE
@@ -15,11 +16,37 @@ from alchemy_hydrate.transform import (
     is_int_enum,
 )
 
+
+class State(enum.Enum):
+    PENDING = "pending"
+    ACTIVE = "active"
+    COMPLETE = "complete"
+
+
+class Level(enum.Enum):
+    ERROR = 1
+    INFO = 5
+    DEBUG = 10
+
+
+class Strength(enum.IntEnum):
+    WEAK = 1
+    MID = 5
+    STRONG = 8
+
+
+class Permissions(enum.Flag):
+    READ = enum.auto()
+    WRITE = enum.auto()
+    EXECUTE = enum.auto()
+    ADMIN = READ | WRITE | EXECUTE
+
+
 Base = declarative_base()
 
 
 class MultiTypeModel(Base):
-    __tablename__ = "testor"
+    __tablename__ = "multi_type"
 
     id: Mapped[int] = mapped_column(unique=True, primary_key=True)
     int_or_none: Mapped[int | None]
@@ -29,26 +56,19 @@ class MultiTypeModel(Base):
     dt: Mapped[datetime.datetime]
     correlation: Mapped[uuid.UUID]
 
-    other_id = mapped_column(ForeignKey("other.id"))
 
-    class StateStr(enum.Enum):
-        Pending = "pending"
-        Active = "active"
-        Complete = "complete"
-
-    state: Mapped[StateStr] = mapped_column(default=StateStr.Pending)
-
-    class LevelInt(enum.Enum):
-        LOW = 1
-        MID = 5
-        HIGN = 10
-
-    level: Mapped[LevelInt] = mapped_column(default=LevelInt.MID)
+class MultiEnum(Base):
+    __tablename__ = "multi_enum"
+    id: Mapped[int] = mapped_column(unique=True, primary_key=True)
+    state: Mapped[State] = mapped_column(Enums(State))
+    level: Mapped[Level] = mapped_column(Enums(Level))
+    strength: Mapped[Strength] = mapped_column(Enums(Strength))
+    permissions: Mapped[Permissions] = mapped_column(Enums(Permissions))
 
 
 def test_multi_type_parse():
     transformer = TransformData(inspect(MultiTypeModel).local_table)
-    assert 10 == len(transformer)
+    assert 7 == len(transformer)
 
 
 def test_multi_type_convert():
@@ -62,9 +82,6 @@ def test_multi_type_convert():
             "text12": "hello",
             "dt": "20240401T131415.123456Z",
             "correlation": "00000000-0000-0000-0000-000000000000",
-            "other_id": "68",
-            "state": "pending",
-            "level": "5",
         }
     )
     assert data == {
@@ -77,9 +94,6 @@ def test_multi_type_convert():
             2024, 4, 1, 13, 14, 15, 123456, tzinfo=datetime.timezone.utc
         ),
         "correlation": uuid.UUID(int=0),
-        "other_id": 68,
-        "state": MultiTypeModel.StateStr.Pending,
-        "level": MultiTypeModel.LevelInt.MID,
     }
 
 
@@ -111,31 +125,6 @@ def test_str_empty():
     assert {"nullable_false": "", "nullable_true": None} == data
 
 
-class State(enum.Enum):
-    PENDING = "pending"
-    ACTIVE = "active"
-    COMPLETE = "complete"
-
-
-class Level(enum.Enum):
-    ERROR = 1
-    INFO = 5
-    DEBUG = 10
-
-
-class Strength(enum.IntEnum):
-    WEAK = 1
-    MID = 5
-    STRONG = 8
-
-
-class Permissions(enum.Flag):
-    READ = enum.auto()
-    WRITE = enum.auto()
-    EXECUTE = enum.auto()
-    ADMIN = READ | WRITE | EXECUTE
-
-
 def test_enum_with_str():
     """Test str to enum.Enum with str member values."""
 
@@ -154,18 +143,38 @@ def test_enum_with_int():
         assert Level.INFO == create_enum_from_string(Level, "invalid")
 
 
-def test_enum_FlagEnum():
-    """Test str to enum.FlagEnum with member values and comma seperated values."""
+def test_enum_flag():
+    """Test str to enum.IntFlag with member values and comma seperated values."""
     assert Permissions.READ == create_flag_from_string(Permissions, "1")
     assert Permissions.WRITE == create_flag_from_string(Permissions, "write")
     assert Permissions.ADMIN == create_flag_from_string(Permissions, "7")
     assert Permissions.ADMIN == create_flag_from_string(
-        Permissions, "read,write, execute"
+        Permissions, "read|write|execute "
     )
     with pytest.raises(ValueError):
         create_enum_from_string(Permissions, "101038")
     with pytest.raises(ValueError):
-        create_enum_from_string(Permissions, "read,invalid")
+        create_enum_from_string(Permissions, "read|invalid")
+
+
+def test_multi_enum_convert():
+    transformer = TransformData(inspect(MultiEnum).local_table)
+    data = transformer(
+        {
+            "id": "123",
+            "state": "pending",
+            "level": "5",
+            "strength": "MID",
+            "permissions": "READ|WRITE",
+        }
+    )
+    assert data == {
+        "id": 123,
+        "state": State.PENDING,
+        "level": Level.INFO,
+        "strength": Strength.MID,
+        "permissions": Permissions.READ | Permissions.WRITE,
+    }
 
 
 def test_enum_type_detect():
@@ -195,7 +204,7 @@ def describe_table(table):
 if __name__ == "__main__":
     transformer = TransformData(inspect(MultiTypeModel).local_table)
 
-    for col in transformer.cols:
+    for col in transformer:
         print(col)
     output = transformer(
         {
