@@ -28,8 +28,66 @@ def model_factory(model, **defaults):
 
 
 def model_one_time(model_cls, **values):
-    factory = model_factory(model_cls)
-    return factory(values)
+    factory = dict_factory(model_cls)
+    return factory(**values)
+
+
+def dict_factory(table: Table, **defaults):
+    """Create a function to create usable table dict.
+
+    When creating an table row instance, all fields must be given.
+    This returns a helper function to create dicts for instance.
+    The helper takes Table column names as keyword arguments, merging
+    them with the defaults, and supplying `null` to any unspecified
+    columns.  Override defaults as needed.
+
+    Args:
+        table: SQLAlchemy Table
+        defaults: Column values applied to each dict.
+
+    Returns:
+        factory(**column_value) -> dict
+
+    Example:
+        func = dict_factory(User.__table__, kind=User.Kind.STANDARD)
+        data = func(name='cjj', email='cjj@example.com')
+        str(data)
+        {'kind':User.Kind.STANDARD, 'name':'cjj', 'email':'cjj@example.com',
+        'gender':None, 'age':None, 'marital_status':None, 'income': None}
+    """
+    required = set()
+    optional = set()
+
+    # Partition the required and nullable columns.
+    for col in table.columns:
+        if bool(col.nullable) or col.primary_key:
+            # Primary keys are considered optional as DB will generate those.
+            optional.add(col.name)
+        else:
+            required.add(col.name)
+
+    def factory(_table_data=(defaults, required, optional), **kwargs) -> dict[str, Any]:
+        """
+        Example function demonstrating type hints for the given signature.
+
+        Args:
+            *kwargs: Give data for Table column name/value.
+            _table_data: Defaults and require/optional columns.
+
+        Returns:
+            A dict suitable for Table row instance creation.
+        """
+        defaults, required, optional = _table_data
+        data = dict(defaults)
+        data.update(kwargs)  # Merge given with defaults
+        remaining_fields = (required.union(optional)).difference(data.keys())
+        for name in remaining_fields:
+            if name not in optional:
+                raise ValueError(f"Not optional: {name}")
+            data[name] = None
+        return data
+
+    return factory
 
 
 def model_dict_factory(model, **defaults):
@@ -44,42 +102,25 @@ def model_dict_factory(model, **defaults):
     """
     table: Table = model.__table__
 
-    required = set()
-    optional = set()
-
-    for col in table.columns:
-        if bool(col.nullable) or col.primary_key:
-            optional.add(col.name)
-        else:
-            required.add(col.name)
+    func = dict_factory(model.__table__, **defaults)
 
     def factory(
         # obj: MyObjectType,
         *args: dict[str, Any],
-        defaults: dict[str, Any] = defaults,
-        required: set[str] = required,
-        optional: set[str] = optional,
+        _func=func,
     ) -> Iterator[dict[str, Any]]:
         """
         Example function demonstrating type hints for the given signature.
 
         Args:
-            *args: Positional arguments
-            defaults: contains values for indefined fields
-            kwarg1: The first keyword argument, a list of strings.
-            kwarg2: The second keyword argument, a list of strings.
+            *args: given partial instance dictionaries
 
         Returns:
             A list of dictionaries with string keys and any values.
             factor(*args: dict[str, Any]) -> Generator(dict[str, Any])
         """
-        for data in args:
-            for field in optional:
-                if field not in data:
-                    data[field] = defaults[field] if field in defaults else None
-            for field in required:
-                if field not in data and field in defaults:
-                    data[field] = defaults[field]
-            yield data
+
+        for kw in args:
+            yield func(**kw)
 
     return factory
