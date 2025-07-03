@@ -1,6 +1,6 @@
-from . import factory
 from .dict_reader import LowerCaseDictReader
+from .factory import Make
 from .registry import registry
 from .transform import TransformData
 
-__all__ = ["registry", "TransformData", "LowerCaseDictReader", "factory"]
+__all__ = ["Make", "registry", "TransformData", "LowerCaseDictReader"]

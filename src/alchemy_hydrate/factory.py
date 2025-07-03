@@ -1,126 +1,125 @@
-from collections.abc import Iterator
-from typing import Any
+from typing import Any, Generic, TypeVar
 
-from sqlalchemy import Table
+import sqlalchemy as sa
 
-__all__ = ["model_factory", "model_dict_factory", "model_one_time"]
+_M = TypeVar("_M", bound=Any)
 
 
-def model_factory(model, **defaults):
-    """Make a factory for creating model instances from required fields.
+def type_is_ORM(mapper: Any):
+    """Is mapper derived from SQLAlchemy ORM model.
 
     Args:
-        model: SQLAlchemy decarative model
-        defaults: value when creating object; required or optional
+        mapper: Assumed SQLAlchemy DeclarativeBase ORM model.
 
-    Returns:
-        factor(*args: dict[str, Any]) -> Generator(model)
+    Raises:
+        TypeError when mapper isn't expected type.
     """
-    dict_factory = model_dict_factory(model, **defaults)
-
-    def factory(*args: dict[str, Any], model=model, dict_factory=dict_factory):
-        for data in args:
-            complete_data = dict_factory(data)
-            obj = model(**complete_data)
-            yield obj
-
-    return factory
+    if not hasattr(mapper, "__table__") or not isinstance(mapper.__table__, sa.Table):
+        name = getattr(mapper, "__name__", repr(mapper))
+        tablename = getattr(mapper, "__tablename__", "?")
+        raise TypeError(
+            f"Expected a SQLAlchemy ORM model class with __table__ attribute. "
+            f"Got {name} (tablename={tablename})."
+        )
 
 
-def model_one_time(model_cls, **values):
-    factory = dict_factory(model_cls)
-    return factory(**values)
+class Make(Generic[_M]):
+    """Make ORM instance when called or ORM dict.
 
-
-def dict_factory(table: Table, **defaults):
-    """Create a function to create usable table dict.
-
-    When creating an table row instance, all fields must be given.
-    This returns a helper function to create dicts for instance.
-    The helper takes Table column names as keyword arguments, merging
+    The helper taketakes Table column names as keyword arguments, merging
     them with the defaults, and supplying `null` to any unspecified
     columns.  Override defaults as needed.
 
-    Args:
-        table: SQLAlchemy Table
-        defaults: Column values applied to each dict.
-
-    Returns:
-        factory(**column_value) -> dict
-
     Example:
-        func = dict_factory(User.__table__, kind=User.Kind.STANDARD)
-        data = func(name='cjj', email='cjj@example.com')
-        str(data)
+        # Create a user with default values.  Unspecified optional fields are None.
+        make_user = Make(User, 'id', kind=User.Kind.STANDARD)
+
+        # Create the dictionary values for an instance
+        >>> make_user.dict(name='cjj', email='cjj@example.com')
         {'kind':User.Kind.STANDARD, 'name':'cjj', 'email':'cjj@example.com',
         'gender':None, 'age':None, 'marital_status':None, 'income': None}
+
+        >>> User(**dict)
+        <User>
+        >>> make_user(name='tfe', email='tfe@example.com')
+        <User>
     """
-    required = set()
-    optional = set()
 
-    # Partition the required and nullable columns.
-    for col in table.columns:
-        if bool(col.nullable) or col.primary_key:
-            # Primary keys are considered optional as DB will generate those.
-            optional.add(col.name)
-        else:
-            required.add(col.name)
+    def __init__(self, mapper: type[_M], *ignore: str, **defaults: Any):
+        """
+        Args:
+            mapper: SQLAlchemy DeclarationBase model to create instances.
+            *ignore: Column names that should be ignored.
+            **defaults: Default values for all instances or dict.
+        """
+        type_is_ORM(mapper)
+        self.mapper: type[_M] = mapper
+        self.required, self.optional = Make.required_optional(mapper, *ignore)
+        self.defaults = defaults
 
-    def factory(_table_data=(defaults, required, optional), **kwargs) -> dict[str, Any]:
+    def __call__(self, **kwargs: Any) -> _M:
+        """Create mapper instance from given arguments and defaults.
+
+        Args:
+            **kwargs: ORM field values.
+
+        Returns:
+            Instance of the mapper.
+        """
+        return self.mapper(**self.dict(**kwargs))
+
+    def dict(self, **kwargs: Any) -> dict[str, Any]:
         """
         Example function demonstrating type hints for the given signature.
 
         Args:
             *kwargs: Give data for Table column name/value.
-            _table_data: Defaults and require/optional columns.
 
         Returns:
             A dict suitable for Table row instance creation.
         """
-        defaults, required, optional = _table_data
-        data = dict(defaults)
+        data = self.defaults.copy()
         data.update(kwargs)  # Merge given with defaults
-        remaining_fields = (required.union(optional)).difference(data.keys())
+        remaining_fields = (self.required | self.optional) - data.keys()
         for name in remaining_fields:
-            if name not in optional:
-                raise ValueError(f"Not optional: {name}")
+            if name not in self.optional:
+                raise ValueError(f"Missing required field: {name}")
             data[name] = None
         return data
 
-    return factory
+    def __repr__(self):
+        return (
+            f"<mapper={self.mapper},"
+            f"required={sorted(self.required)}, "
+            f"optional={sorted(self.optional)}, "
+            f"defaults={sorted(self.defaults.items())}>"
+        )
 
-
-def model_dict_factory(model, **defaults):
-    """Make a factory for creating model data dictionaries.
-
-    Args:
-        model: SQLAlchemy decarative model
-        defaults: values when creating dict; required or optional
-
-    Returns:
-        factor(*args: dict[str, Any]) -> Generator(model)
-    """
-    table: Table = model.__table__
-
-    func = dict_factory(model.__table__, **defaults)
-
-    def factory(
-        # obj: MyObjectType,
-        *args: dict[str, Any],
-        _func=func,
-    ) -> Iterator[dict[str, Any]]:
-        """
-        Example function demonstrating type hints for the given signature.
+    @staticmethod
+    def required_optional(mapper: Any, *ignore: str) -> tuple[set[str], set[str]]:
+        """Analyze a SQLAlchemy mapper and return the optional and required fields.
 
         Args:
-            *args: given partial instance dictionaries
+            table: DeclarativeBase or Table to analyze.
+            *ignore: Field names to ignore.
 
         Returns:
-            A list of dictionaries with string keys and any values.
-            factor(*args: dict[str, Any]) -> Generator(dict[str, Any])
+            Tuple of required field names and optional field names.
+
+        Raise:
+            TypeError for abstrace base class
         """
+        type_is_ORM(mapper)
+        required = set()
+        optional = set()
 
-        for kw in args:
-            yield func(**kw)
-
-    return factory
+        # Partition the required and nullable columns.
+        for col in mapper.__table__.columns:
+            if col.name in ignore:
+                continue
+            elif bool(col.nullable) or col.primary_key:
+                # Primary keys are considered optional as DB will generate those.
+                optional.add(col.name)
+            else:
+                required.add(col.name)
+        return required, optional

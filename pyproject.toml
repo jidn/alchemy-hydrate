@@ -1,6 +1,6 @@
 [project]
 name = "alchemy-hydrate"
-version = "0.1.1"
+version = "0.1.2"
 description = "Create dict from CSV for SQLAlchemy model instance."
 readme = "README.md"
 authors = [
@@ -8,7 +8,7 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "sqlalchemy>=2.0.41",
+    "sqlalchemy>=2",
 ]
 
 [build-system]
