@@ -26,11 +26,11 @@ class Child(BaseTest):
     name: orm.Mapped[str]
     age: orm.Mapped[int | None]
     parent_id: orm.Mapped[int] = orm.mapped_column(sa.ForeignKey("parent.id"))
-    parent: orm.Mapped[Parent] = orm.relationship(back_populates="children")
+    parent: orm.Mapped[Parent] = orm.relationship(back_populates="children", init=False)
 
 
 # ----------------------------------------------------------------------
-# Async fixture with in-memory DB and tables
+# Fixture with in-memory DB and tables
 # ----------------------------------------------------------------------
 
 
@@ -55,7 +55,7 @@ def test_factory_type_is_ORM_accepts_only_declarative():
     type_is_ORM(Parent)
 
     # pass on instance
-    type_is_ORM(Parent(name="p", children=[]))
+    type_is_ORM(Parent(name="dad", children=[]))
 
     # should raise for non ORM or instances
     with pytest.raises(TypeError):
@@ -73,7 +73,7 @@ def test_factory_discovery():
     assert {"name", "parent_id"} == c.required
     assert {"age"} == c.optional  # id was ignored
     assert {"parent"} == c.relationships
-    assert {"id"} == c.no_init
+    assert {"id", "parent"} == c.no_init
 
 
 def test_factory_invalid_default_raises_AttributeError():
@@ -115,6 +115,65 @@ def test_factory_relationship(session: orm.Session):
     assert parent.children == [child]
 
 
+def test_factory_no_init_in_call(session: orm.Session):
+    p = Make(Parent)
+    c = Make(Child)
+    dad = p(name="Dad")
+    children = [c(name=name, parent=dad) for name in ("A", "B", "C")]
+    mom = p(name="Mom", children=children)
+    session.add_all((dad, mom))
+    session.flush()
+    assert 1 == dad.id
+    assert 2 == mom.id
+    assert 3 == len(mom.children)
+
+
+def test_factory_no_init_field_is_assigned_after_construction(monkeypatch):
+    """Verify that fields with init=False (e.g., id) are set after __init__."""
+    make_parent = Make(Parent, name="default")
+
+    called = []
+
+    # patch Parent.__init__ to capture args actually passed during init
+    orig_init = Parent.__init__
+
+    def spy_init(self, *args, **kwargs):
+        called.append(dict(kwargs))
+        orig_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(Parent, "__init__", spy_init)
+
+    # Create object specifying id=99 (init=False)
+    p = make_parent(id=99, name="alpha")
+
+    # --- Assertions ---
+    # 1. id should NOT have been passed to __init__
+    init_kwargs = called[0]
+    assert "id" not in init_kwargs, "id should not appear in __init__ arguments"
+
+    # 2. But id should exist on the resulting object afterward
+    assert p.id == 99
+    assert p.name == "alpha"
+
+    # 3. Confirm Make recorded it as no_init
+    assert "id" in make_parent.no_init
+
+
+def test_no_init_relationship_is_set_after_construction():
+    """Verify that a relationship with init=False (Child.parent) is assigned post-init."""
+    make_parent = Make(Parent, name="P1")
+    make_child = Make(Child, name="C1")
+
+    parent = make_parent()
+    child = make_child(parent=parent)
+
+    # The parent relationship should be assigned after __init__
+    assert child.parent is parent
+    assert parent.children == [child] or not parent.children
+    # Confirm Make recorded it as no_init
+    assert "parent" in make_child.no_init
+
+
 def test_factory_missing_relationship_raises_ValueError():
     make_child = Make(Child, name="no-parent", age=1)
     # parent_id is required
@@ -138,18 +197,19 @@ def test_factory_repr_contains_key_info():
 
 def test_factory_example(session: orm.Session):
     """Test example in Make.__doc__"""
-    # Create a user with default values; ignore `id`.
-    parent = Parent(name="Dad", children=[])
-    m = Make(Child, parent=parent)
+    # children required as Make is not used.
+    dad = Parent(name="Dad", children=[])
+
+    m = Make(Child, parent=dad)
     names = ["Anna", "Benjamin"]
     # `parent_id` is not required when relationship is given.
-    parent.children = [m(name=name) for name in names]
+    dad.children = [m(name=name) for name in names]
 
-    session.add(parent)
+    session.add(dad)
     session.flush()
-    assert 1 == parent.id
-    assert [1, 2] == [_.id for _ in parent.children]
-    assert names == [_.name for _ in parent.children]
+    assert 1 == dad.id
+    assert [1, 2] == [_.id for _ in dad.children]
+    assert names == [_.name for _ in dad.children]
 
 
 # ----------------------------------------------------------------------
@@ -158,7 +218,7 @@ def test_factory_example(session: orm.Session):
 
 
 def test_factory_empty_defaults_and_no_kwargs_optional_none():
-    m = Make(Parent)
+    m = Make(Parent, children=[])
     data = m.dict(name="hi")
     assert {"name": "hi", "children": []} == data
 

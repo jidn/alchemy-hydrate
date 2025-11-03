@@ -3,7 +3,6 @@ from typing import Any, Generic, TypeVar
 
 import sqlalchemy as sa
 
-_M = TypeVar("_M", bound=Any)
 
 
 def type_is_ORM(mapper: Any):
@@ -24,6 +23,7 @@ def type_is_ORM(mapper: Any):
         )
 
 
+_M = TypeVar("_M", bound=Any)
 class Make(Generic[_M]):
     """Make ORM instance when called or ORM dict.
 
@@ -93,15 +93,21 @@ class Make(Generic[_M]):
     def __call__(self, **kwargs: Any) -> _M:
         """Create mapper instance from given arguments and defaults.
 
+        Set `init=False` attributes after initialization.
+
         Args:
-            **kwargs: ORM field values.
+            **kwargs: ORM field values, overriding defaults if any.
 
         Returns:
             Instance of the mapper.
         """
-        data = self.dict(**{k: v for k, v in kwargs.items() if k not in self.no_init})
+        data: dict[str, Any] = {}
+        post: dict[str, Any] = {}
+        for k, v in self.dict(**kwargs).items():
+            (post if k in self.no_init else data)[k] = v
         inst = self.mapper(**data)
-        for k, v in {k: v for k, v in kwargs.items() if k in self.no_init}.items():
+
+        for k, v in post.items():
             setattr(inst, k, v)
 
         return inst
@@ -119,7 +125,13 @@ class Make(Generic[_M]):
         data.update(kwargs)
 
         # Add default [] for list-like relationships if missing
-        data.update({key: [] for key in self.uselist if key not in data})
+        data.update(
+            {
+                key: []
+                for key in self.uselist
+                if key not in data and key not in self.no_init
+            }
+        )
 
         # Relationship foreign keys are not needed. Set to zero.
         for rel, fks in self.relationship_fks.items():
@@ -148,7 +160,7 @@ class Make(Generic[_M]):
             f"<mapper={self.mapper},"
             f"required={sorted(self.required)}, "
             f"optional={sorted(self.optional)}, "
-            f"defaults={sorted(self.defaults.items())}>"
+            f"defaults={sorted(self.defaults.keys())}>"
         )
 
     @staticmethod
