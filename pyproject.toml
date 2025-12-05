@@ -1,6 +1,6 @@
 [project]
 name = "alchemy-hydrate"
-version = "0.1.3"
+version = "0.1.4"
 description = "Create dict from CSV for SQLAlchemy model instance."
 readme = "README.md"
 authors = [
